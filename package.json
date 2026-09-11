@@ -1,0 +1,10 @@
+{
+  "name": "vini",
+  "version": "1.0.0",
+  "description": "Web process definition system",
+  "main": "vini.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 0"
+  },
+  "dependencies": {}
+}
