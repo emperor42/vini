@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VINI browser workflow demo</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/vini.js" defer></script>
+  <script src="/demo.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">Browser asset demo</p>
+      <h1>VINI workflow</h1>
+      <p class="lede">
+        This page uses the same <code>vini.js</code> file that Stenella serves.
+        Workflow progress stays in this browser's local storage.
+      </p>
+    </header>
+
+    <section class="card" aria-labelledby="workflow-heading">
+      <div class="card-heading">
+        <div>
+          <p class="eyebrow">Two-step profile</p>
+          <h2 id="workflow-heading">Contact details</h2>
+        </div>
+        <span id="status" class="pill">Not started</span>
+      </div>
+
+      <progress id="progress" max="100" value="0">0%</progress>
+      <ol id="steps" class="steps" aria-label="Workflow steps"></ol>
+
+      <form id="step-form" hidden>
+        <div id="email-field">
+          <label for="email">Email address</label>
+          <div class="field-row">
+            <input id="email" name="email" type="email" autocomplete="email" required>
+          </div>
+          <p id="validation" class="error" role="alert" hidden>Enter a valid email address.</p>
+        </div>
+        <p id="review" hidden>The demo has a valid email. Continue to finish the local workflow.</p>
+        <button id="next" type="submit">Continue</button>
+      </form>
+
+      <div class="actions">
+        <button id="start" type="button" class="primary">Start workflow</button>
+        <button id="pause" type="button" disabled>Pause</button>
+        <button id="end" type="button" disabled>End</button>
+        <button id="clear" type="button" class="quiet">Remove saved workflow</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="events-heading">
+      <p class="eyebrow">Live DOM events</p>
+      <h2 id="events-heading">Event log</h2>
+      <ol id="events" class="events" aria-live="polite"></ol>
+    </section>
+  </main>
+</body>
+</html>

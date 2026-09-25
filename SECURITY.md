@@ -1,380 +1,133 @@
-# VINI Security Overview
+# VINI security notes
 
-## Security Overview
-The VINI project is a JavaScript-based web process definition system that enables secure programmatic definition of user flows. This architecture requires robust security measures to protect workflow definitions, execution, and data from unauthorized access and tampering.
+## Scope and trust boundary
 
-## Security Features
-- **Process Definition Security**: Secure workflow definition and management
-- **Execution Security**: Secure workflow execution with validation
-- **Data Protection**: Protection of workflow data and configurations
-- **Access Control**: Role-based access control for workflow management
-- **Authentication**: Secure authentication for workflow execution
-- **Authorization**: Granular access control for workflow operations
-- **Audit Logging**: Comprehensive logging of workflow activities
-- **Encryption**: Optional data encryption for sensitive workflows
-- **Validation**: Server validation for critical workflows
-- **Local Security**: Secure local workflow execution
+VINI has two separate pieces:
 
-## Security Considerations
+1. `vini.js`, a browser-local workflow coordinator; and
+2. an optional standard-library Go server that serves a static demo.
 
-### Workflow Security
-- **Definition Security**: Secure workflow definition and management
-- **Execution Security**: Secure workflow execution and validation
-- **Data Security**: Protection of workflow data and configurations
-- **Access Control**: Role-based access control for workflow operations
-- **Audit Security**: Comprehensive logging and monitoring of workflow activities
+Neither piece is a security boundary, workflow authorization service, or
+durable transaction system. Browser JavaScript runs with the same privileges as
+the page that loaded it. Code, step metadata, validators, and event handlers
+supplied by an application must therefore be trusted to the same degree as the
+application itself.
 
-### Integration Security
-- **VICI Integration**: Secure integration with VICI change management
-- **VIDI Integration**: Secure integration with VIDI data management
-- **VENI Integration**: Secure integration with VENI web components
-- **Cross-Service Security**: Secure communication between integrated services
+VINI does **not** implement accounts, roles, permissions, CSRF protection,
+server-side workflow validation, audit attestation, conflict resolution, or
+sandboxing. There are no ATP, VICI, VIDI, or VENI network calls. Integrations
+must be implemented and secured by the embedding application.
 
-### Application Security
-- **Input Validation**: Validates workflow definitions and inputs
-- **Output Encoding**: Prevents injection attacks
-- **Authentication**: Secure authentication for workflow operations
-- **Authorization**: Role-based access control
-- **Session Management**: Secure session handling
-- **Error Handling**: Secure error response handling
+## Browser workflow data
 
-## Security Architecture
+Workflow state, step payloads, and execution logs are serialized as plain JSON
+under the origin-wide `vini_workflows` local-storage key.
 
-### Defense in Depth
-1. **Network Layer**: Secure communication and transport security
-2. **Application Layer**: Workflow security and authentication
-3. **Data Layer**: Data encryption and access control
-4. **Physical Layer**: Infrastructure security and monitoring
-5. **Execution Layer**: Secure workflow execution and validation
+- Anyone with access to the browser profile or origin can inspect that data.
+- Browser extensions, injected scripts, XSS, and same-origin compromise can read
+  or modify workflow state and execute validators.
+- Local storage is not encrypted, integrity protected, access controlled, or
+  suitable as a tamper-evident audit log.
+- Storage failure is handled as memory-only operation. Applications that need a
+  durability guarantee must persist and authorize data through a server.
+- The 500-entry workflow log limit bounds growth but does not make the log
+  tamper-resistant or suitable for regulated audit evidence.
 
-### Zero Trust Security Model
-- **Verify Everything**: Never trust, always verify
-- **Least Privilege**: Minimum necessary access
-- **Continuous Verification**: Ongoing authentication and authorization
-- **Micro-Segmentation**: Network isolation between components
+Do not place passwords, access tokens, private keys, payment details, medical
+data, or other secrets in `workflow.data` or `step.data`. The execution log
+contains step IDs and lifecycle messages and should not be treated as a secret
+store either.
 
-## Security Implementation
+If an application needs durable or sensitive state, it should store a small,
+non-sensitive workflow reference in VINI and keep authoritative records behind
+an authenticated server API with server-side validation, authorization,
+transaction boundaries, and an appropriate audit design.
 
-### Workflow Security
+## Validation
+
+Step validators run synchronously in the page with page privileges. A validator
+can read cookies, call APIs available to the origin, mutate the workflow, or run
+arbitrary code. Its return value is useful for local UX only.
+
+- A false result or exception prevents the current step from advancing.
+- A truthy Promise is not an awaited validation result and must not be used.
+- Local validation can be bypassed by modifying JavaScript or local storage.
+- Security-sensitive decisions must be repeated and enforced by the server.
+- `action` is descriptive metadata; VINI never executes it.
+
+Errors thrown by a validator are converted to event/log data. Avoid placing
+credentials or sensitive payloads in exception messages.
+
+## Events and callbacks
+
+VINI dispatches bubbling DOM events with the live workflow object in
+`event.detail.workflow`. Other same-page code can therefore observe and mutate
+workflows. Treat event handlers as trusted application code and avoid exposing
+VINI on pages that accept untrusted script.
+
+DOM event delivery is not an integrity mechanism. Do not use an event listener
+as proof that a privileged action was authorized or completed. Keep privileged
+work on a server that independently checks identity, authorization, CSRF state,
+and request validity.
+
+Listener exceptions are isolated to protect lifecycle execution, but this is
+only fault containment, not isolation or recovery.
+
+## Encryption helpers
+
+VINI does not bundle an encryption implementation. If `window.vici` exposes
+`encrypt` and `decrypt`, the helper methods delegate to it. The referenced VICI
+implementation is responsible for key derivation, authenticated encryption, and
+its own operational security.
+
+Without VICI, `encryptData()` returns:
+
 ```javascript
-// Example: Secure workflow definition
-const secureWorkflow = new Vini.Workflow({
-  name: 'Secure User Login',
-  security: {
-    requireAuthentication: true,
-    encryptionKey: 'your-encryption-key',
-    accessControl: {
-      roles: ['admin', 'user'],
-      permissions: ['execute', 'view', 'modify']
-    }
-  },
-  steps: [
-    {
-      name: 'Show Login Form',
-      action: 'show',
-      component: 'login-form'
-    },
-    {
-      name: 'Validate Credentials',
-      action: 'validate',
-      service: 'auth-api',
-      validation: 'server-validation',
-      onSuccess: 'show-dashboard',
-      onFailure: 'show-error'
-    }
-  ]
-});
+{ plain: String(plaintext), method: "none" }
 ```
 
-### Authentication and Authorization
-```javascript
-// Example: Role-based access control
-class VINIAuthentication {
-  constructor() {
-    this.users = new Map();
-    this.roles = new Map();
-  }
+This is explicitly plaintext compatibility data. It provides no
+confidentiality, integrity, authentication, or protection against tampering.
+Never treat `method: "none"` as ciphertext or send it to an untrusted party.
 
-  login(userId, token) {
-    const user = this.validateToken(token);
-    if (user) {
-      this.users.set(userId, user);
-      return true;
-    }
-    return false;
-  }
+Passphrases and plaintext are held in page memory while helper code runs. Avoid
+long-lived secrets in browser workflow code. Browser encryption cannot protect
+content from scripts executing in the same origin.
 
-  hasPermission(userId, resource, action) {
-    const user = this.users.get(userId);
-    if (!user) {
-      return false;
-    }
+## Cross-tab and manual mutation risks
 
-    // Check user roles and permissions
-    for (const role of user.roles) {
-      for (const permission of role.permissions) {
-        if (permission.resource === resource && permission.action === action) {
-          return true;
-        }
-      }
-    }
+VINI responds to same-origin `storage` changes by reloading its in-memory
+snapshot. It does not lock, merge, or reconcile simultaneous writes. Last-write-
+wins behavior and page-local validators must not be used for financial,
+inventory, identity, or other authoritative decisions.
 
-    return false;
-  }
-}
-```
+The constructor and methods return live mutable objects for compatibility.
+Direct mutation is not logged and is not automatically persisted. Prefer the
+lifecycle API, and validate any object before passing it to a server.
 
-### Encryption
-```javascript
-// Example: Data encryption
-class VINICryptography {
-  constructor(encryptionKey) {
-    this.encryptionKey = encryptionKey;
-    this.algorithm = 'AES-GCM';
-  }
+## Go demo server
 
-  encrypt(data) {
-    // Use Web Crypto API for encryption
-    return window.crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: this.generateIV() },
-      this.importKey(this.encryptionKey),
-      new TextEncoder().encode(data)
-    );
-  }
+The Go server is a local development/demo convenience, not a production
+workflow backend.
 
-  decrypt(encryptedData) {
-    return window.crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: this.getIV(encryptedData) },
-      this.importKey(this.encryptionKey),
-      encryptedData
-    );
-  }
-}
-```
+- It binds to `127.0.0.1:8088` by default.
+- It serves only embedded static files and accepts `GET`/`HEAD` requests.
+- It sends a restrictive Content Security Policy and anti-sniffing/referrer
+  headers.
+- It performs no authentication, authorization, rate limiting, CSRF checks, or
+  TLS termination.
+- Its workflow state remains entirely in the browser; the server never receives
+  or validates it.
 
-## Compliance and Standards
+The Docker image sets `VINI_HOST=0.0.0.0` so a published port can work inside a
+container. Publish that port to host loopback only. The image runs as an
+unprivileged user and requires no writable application files, but it is still
+not hardened as an Internet-facing application.
 
-### Regulatory Compliance
-- **GDPR**: European data protection regulations
-- **CCPA**: California Consumer Privacy Act
-- **HIPAA**: Healthcare data protection
-- **SOX**: Financial data regulations
+## Reporting a suspected vulnerability
 
-### Security Standards
-- **ISO 27001**: Information security management
-- **NIST CSF**: Cybersecurity framework
-- **CIS Controls**: Critical security controls
-- **OWASP TOP 10**: Web application security risks
-
-## Security Testing
-
-### Vulnerability Assessment
-- **Static Application Security Testing (SAST)**: Code analysis
-- **Dynamic Application Security Testing (DAST)**: Runtime testing
-- **Interactive Application Security Testing (IAST)**: Combined approach
-
-### Penetration Testing
-- **External Testing**: Network and application security testing
-- **Internal Testing**: Insider threat assessment
-- **Social Engineering**: Human factor testing
-- **Physical Security**: Infrastructure security testing
-
-### Security Auditing
-- **Regular Audits**: Periodic security assessments
-- **Continuous Monitoring**: Real-time security monitoring
-- **Incident Response**: Rapid response to security incidents
-- **Remediation**: Address identified vulnerabilities
-
-## Security Monitoring
-
-### Security Information and Event Management (SIEM)
-- **Log Aggregation**: Centralized log collection
-- **Real-time Analysis**: Immediate threat detection
-- **Alerting**: Automated security alerts
-- **Correlation**: Threat correlation and analysis
-
-### Security Analytics
-- **Behavior Analytics**: User and system behavior analysis
-- **Threat Intelligence**: Integration with threat intelligence feeds
-- **Risk Assessment**: Continuous risk assessment
-- **Compliance Reporting**: Automated compliance reporting
-
-## Integration with VICI Security
-
-### Centralized Security Management
-- **Single Sign-On**: Unified authentication
-- **Centralized Logging**: Aggregate security logs
-- **Policy Enforcement**: Centralized security policies
-- **Compliance Reporting**: Unified compliance reporting
-
-### Workflow Security APIs
-```http
-// VICI security endpoints
-GET /api/vici/security/policies - Get VICI security policies
-POST /api/vici/security/policies - Update VICI security policies
-GET /api/vICI/security/logs - Get VICI security logs
-GET /api/vici/security/alerts - Get VICI security alerts
-```
-
-## Security Training
-
-### Developer Training
-- **Secure Coding**: Training on secure coding practices
-- **Security Awareness**: General security awareness
-- **Compliance Training**: Regulatory compliance training
-- **Incident Response**: Security incident response training
-
-### User Training
-- **Password Security**: Best practices for password management
-- **Phishing Awareness**: Recognition of phishing attempts
-- **Data Handling**: Proper data handling procedures
-- **Security Policies**: Understanding and compliance with security policies
-
-## Security Documentation
-
-### Internal Documentation
-- **Security Architecture**: Detailed security design
-- **Implementation Guides**: Step-by-step security implementation
-- **Troubleshooting**: Security troubleshooting guides
-- **Policy Documents**: Security policies and procedures
-
-### External Documentation
-- **Security Reports**: Security assessment reports
-- **Compliance Certificates**: Security compliance certificates
-- **User Guides**: User security documentation
-- **API Documentation**: Security-related API documentation
-
-## Future Security Enhancements
-
-### Emerging Technologies
-- **Zero-Trust Architecture**: Next-generation security architecture
-- **AI-powered Security**: Machine learning for threat detection
-- **Quantum Cryptography**: Quantum-resistant encryption
-- **Deception Technology**: Honeypots and deception systems
-
-### Advanced Features
-- **Behavioral Biometrics**: Advanced authentication methods
-- **Blockchain Security**: Immutable security logging
-- **Secure Multi-Party Computation**: Privacy-preserving computations
-- **Homomorphic Encryption**: Computation on encrypted data
-
-## Security Configuration
-
-### Environment Variables
-```javascript
-// Security configuration
-const securityConfig = {
-  encryption: {
-    key: 'your-encryption-key',
-    algorithm: 'AES-GCM'
-  },
-  authentication: {
-    jwt_secret: 'your-jwt-secret',
-    session_timeout: 3600
-  },
-  authorization: {
-    role_based_access: true,
-    multi_factor_auth: false
-  },
-  logging: {
-    audit_log_enabled: true,
-    log_level: 'INFO',
-    retention_days: 365
-  },
-  network: {
-    https_enabled: true,
-    cors_origins: ['https://example.com'],
-    rate_limit: {
-      requests_per_minute: 100,
-      burst_requests: 10
-    }
-  }
-};
-```
-
-### Configuration File
-```yaml
-# security.yaml
-security:
-  encryption:
-    algorithm: "AES-GCM"
-    key_rotation_days: 90
-
-  authentication:
-    jwt_secret: "${JWT_SECRET}"
-    session_timeout_minutes: 30
-
-  authorization:
-    role_based_access: true
-    multi_factor_auth: false
-
-  logging:
-    audit_log_enabled: true
-    log_level: "INFO"
-    retention_days: 365
-
-  network:
-    https_enabled: true
-    cors_origins: ["https://example.com"]
-    rate_limit:
-      requests_per_minute: 100
-      burst_requests: 10
-```
-
-## Security Training
-
-### Developer Training
-- **Secure Coding**: Training on secure coding practices
-- **Security Awareness**: General security awareness
-- **Compliance Training**: Regulatory compliance training
-- **Incident Response**: Security incident response training
-
-### User Training
-- **Password Security**: Best practices for password management
-- **Phishing Awareness**: Recognition of phishing attempts
-- **Data Handling**: Proper data handling procedures
-- **Security Policies**: Understanding and compliance with security policies
-
-## Security Documentation
-
-### Internal Documentation
-- **Security Architecture**: Detailed security design
-- **Implementation Guides**: Step-by-step security implementation
-- **Troubleshooting**: Security troubleshooting guides
-- **Policy Documents**: Security policies and procedures
-
-### External Documentation
-- **Security Reports**: Security assessment reports
-- **Compliance Certificates**: Security compliance certificates
-- **User Guides**: User security documentation
-- **API Documentation**: Security-related API documentation
-
-## Future Security Enhancements
-
-### Emerging Technologies
-- **Zero-Trust Architecture**: Next-generation security architecture
-- **AI-powered Security**: Machine learning for threat detection
-- **Quantum Cryptography**: Quantum-resistant encryption
-- **Deception Technology**: Honeypots and deception systems
-
-### Advanced Features
-- **Behavioral Biometrics**: Advanced authentication methods
-- **Blockchain Security**: Immutable security logging
-- **Secure Multi-Party Computation**: Privacy-preserving computations
-- **Homomorphic Encryption**: Computation on encrypted data
-
-## Conclusion
-
-The VINI project implements comprehensive security measures to protect workflow definition and execution. The security architecture follows industry best practices, compliance requirements, and emerging security technologies to ensure robust protection of sensitive data and systems.
-
-The security implementation provides:
-- **Workflow Protection**: Secure workflow definition and execution
-- **Access Control**: Granular access control and authentication
-- **Data Protection**: Secure data storage and transmission
-- **Integration Security**: Secure integration with VICI, VIDI, and VENI
-- **Threat Prevention**: Proactive threat detection and prevention
-- **Compliance**: Regulatory compliance and standards adherence
-- **Monitoring**: Real-time security monitoring and alerting
-- **Response**: Rapid incident response and remediation
-
-This security implementation ensures that VINI can safely define and execute workflows while maintaining the highest standards of security, privacy, and compliance.
+Report suspected vulnerabilities privately to the project maintainers rather
+than putting credentials, sensitive payloads, or exploit details in a public
+issue. Include the affected file, a minimal browser reproduction, and the
+deployment assumptions. Distinguish clearly between a browser workflow UX
+issue and a claim that a server-authorized action was bypassed.

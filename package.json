@@ -1,10 +1,26 @@
 {
   "name": "vini",
   "version": "1.0.0",
-  "description": "Web process definition system",
+  "description": "Dependency-free browser workflow and data-passing helper",
   "main": "vini.js",
+  "browser": "vini.js",
+  "sideEffects": true,
+  "files": [
+    "vini.js",
+    "vini_test.js",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 0"
+    "test": "node --test vini_test.js"
   },
-  "dependencies": {}
+  "keywords": [
+    "browser",
+    "workflow",
+    "state",
+    "localstorage"
+  ],
+  "author": "Matthew Salvatore Giancola",
+  "license": "MIT"
 }

@@ -1,591 +1,300 @@
-# VINI (Workflow Definition System)
+# VINI browser workflow helper
 
-**MIT License © Matthew Salvatore Giancola**
+VINI is a small, dependency-free JavaScript helper for defining and advancing
+multi-step browser workflows. It manages state, step payloads, progress, and a
+bounded local execution log. It does not render workflow UI and it does not
+provide a server, ATP client, authentication layer, authorization layer, or
+transaction engine.
 
-## Overview
+VINI is primarily a **browser asset**. Stenella serves this directory's
+`vini.js` directly; there is no build step and no Node.js server runtime.
 
-VINI is a JavaScript-based web process definition system that enables secure programmatic definition of user flows. It links between pages, changes to components, and prompts to users, integrating well with VICI, VIDI, and VENI. All workflows run locally unless server validated.
+## Browser use
 
-## Installation
+Load the script before application code that uses it. A `defer` script executes
+after the document has been parsed and before `DOMContentLoaded`:
 
-### Prerequisites
-- Node.js (for build tools, optional for runtime)
-- Modern web browser with JavaScript support
-- No external server dependencies required
+```html
+<script src="/s/static/lib/vini.js" defer></script>
+<script src="/app.js" defer></script>
+```
 
-### Installation Steps
+The script exposes two browser globals:
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/emperor42/vini.git
-   cd vini
-   ```
+- `window.vini` — the shared workflow manager used by most applications.
+- `window.Vini` — the constructor for an isolated manager with its own
+  listeners. Workflows still use the same browser-origin storage key.
 
-2. Include VINI in your HTML:
-   ```html
-   <!-- Option 1: Direct script tag -->
-   <script src="vini.js"></script>
+The existing CommonJS export (`require("./vini.js").Vini`) is retained for
+tests and tooling only. VINI does not turn JavaScript browser state into a
+server-side or durable workflow service.
 
-   <!-- Option 2: Local file -->
-   <script>
-   // VINI will automatically initialize
-   </script>
-   ```
+## Basic example
 
-3. For Node.js development (optional):
-   ```bash
-   # Install build tools
-   npm install
-   
-   # Build for distribution
-   npm run build
-   ```
+```html
+<form id="profile-form">
+  <label>Email <input id="email" type="email" required></label>
+  <button type="submit">Continue</button>
+</form>
+<pre id="workflow-status" aria-live="polite"></pre>
 
-## Usage (Standalone)
+<script src="/s/static/lib/vini.js" defer></script>
+<script defer>
+  const workflow = vini.define("profile", {
+    steps: [
+      {
+        id: "email",
+        title: "Confirm your email",
+        validate(data) {
+          return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email || "");
+        }
+      },
+      { id: "review", title: "Review the profile" }
+    ]
+  });
 
-### Basic Usage
+  vini.on("step", (event) => {
+    const current = event.detail.workflow;
+    const step = event.detail.step;
+    document.querySelector("#workflow-status").textContent = step
+      ? `${current.current + 1}/${current.steps.length}: ${step.title}`
+      : "Workflow complete";
+  });
+
+  vini.on("error", (event) => {
+    console.warn(event.detail.error.message);
+  });
+
+  document.querySelector("#profile-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    vini.continue(workflow.id, {
+      email: document.querySelector("#email").value
+    });
+  });
+
+  vini.start(workflow.id);
+</script>
+```
+
+`define()`, `start()`, and the other lifecycle methods are synchronous. They
+return workflow objects; they are not Promises.
+
+## Defining and inspecting workflows
 
 ```javascript
-// Basic VINI usage
-<script src="vini.js"></script>
-
-// VINI will automatically initialize
-
-// Define a workflow
-const workflow = new Vini.Workflow({
-  name: 'User Login Process',
+const workflow = vini.define("checkout", {
+  id: "checkout-v1",       // optional; defaults to a generated slug + suffix
+  label: "Checkout",
   steps: [
     {
-      name: 'Show Login Form',
-      action: 'show', 
-      component: 'login-form'
+      id: "contact",       // defaults to the numeric step index
+      title: "Contact",    // defaults to the one-based step number
+      action: "collect",   // metadata only; VINI does not execute it
+      validate(data) {     // synchronous; false or a throw rejects the step
+        return Boolean(data.email);
+      }
     },
-    {
-      name: 'Validate Credentials',
-      action: 'validate',
-      service: 'auth-api',
-      onSuccess: 'show-dashboard',
-      onFailure: 'show-error'
-    }
+    { id: "review", title: "Review" }
   ]
 });
 
-// Start the workflow
-workflow.start();
+vini.get(workflow.id);       // workflow or null
+vini.getWorkflow(workflow.id); // compatibility alias
+vini.list();                // newest-created workflow first
+vini.remove(workflow.id);   // true when a workflow was removed
 ```
 
-### Advanced Usage
+A persisted or returned workflow has this general shape:
 
 ```javascript
-// Define complex workflows with conditions
-const complexWorkflow = new Vini.Workflow({
-  name: 'E-commerce Checkout',
+{
+  id: "checkout-v1",
+  name: "checkout",
+  label: "Checkout",
+  status: "running", // defined | running | paused | done | ended
   steps: [
     {
-      name: 'Add to Cart',
-      action: 'modify-state',
-      state: { cart: { items: ['product1'], total: 29.99 } }
-    },
-    {
-      name: 'Proceed to Checkout',
-      action: 'validate-security',
-      validation: 'address-verification',
-      onSuccess: 'show-payment-form',
-      onFailure: 'prompt-authentication'
+      id: "contact",
+      title: "Contact",
+      action: "collect",
+      validate: null,       // functions are runtime-only
+      data: { email: "ada@example.test" },
+      completed_at: "2026-09-25T12:00:00.000Z"
     }
   ],
-  security: {
-    requireAuthentication: true,
-    encryptionKey: 'your-encryption-key'
-  }
-});\n// Workflow event handlers
-workflow.on('step-complete', (event) => {
-  console.log(`Step completed: ${event.step.name}`);
-});
-
-workflow.on('validation-error', (event) => {
-  console.error(`Validation error: ${event.error}`);
-});
-```
-
-### API Endpoints
-
-| Method | Description |
-|--------|-------------|
-| `new Vini.Workflow(options)` | Create new workflow |
-| `workflow.start()` | Start workflow execution |
-| `workflow.pause()` | Pause workflow execution |
-| `workflow.resume()` | Resume workflow execution |
-| `workflow.stop()` | Stop workflow execution |
-| `workflow.restart()` | Restart workflow |
-| `workflow.getState()` | Get current workflow state |
-| `workflow.setState(state)` | Set workflow state |
-| `workflow.getProgress()` | Get workflow execution progress |
-| `workflow.getLogs()` | Get workflow execution logs |
-
-### Example HTML Page
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>VINI Workflow Demo</title>
-    <!-- Include VINI -->
-    <script src="vini.js"></script>
-</head>
-<body>
-    <!-- VINI will manage user workflows here -->
-    <div id="workflow-container"></div>
-    <!-- VINI will render workflow steps here -->
-    
-    <script>
-    // Define and start workflow
-    const workflow = new Vini.Workflow({
-        name: 'User Login Process',
-        steps: [
-            {
-                name: 'Show Login Form',
-                action: 'show',
-                component: 'login-form'
-            }
-        ]
-    });
-    
-    // Start the workflow
-    workflow.start();
-    </script>
-</body>
-</html>
-```
-
-## Integration with ATP
-
-### Workflow Integration
-
-VINI integrates with ATP to provide centralized workflow management:
-
-```javascript
-// VINI with ATP integration
-const workflow = new Vini.Workflow({
-    name: 'User Login Process',
-    steps: [
-        {
-            name: 'Show Login Form',
-            action: 'show',
-            component: 'login-form'
-        }
-    ],
-    security: {
-        requireAuthentication: true,
-        encryptionKey: 'your-encryption-key'
-    },
-    syncWithATP: true,
-    onWorkflowStart: function(event) {
-        console.log('Workflow started:', event.workflow.name);
-    },
-    onStepComplete: function(event) {
-        console.log('Step completed:', event.step.name);
-    }
-});
-
-// Synchronize with ATP
-workflow.syncWithATP().then(() => {
-    console.log('Workflow synchronized with ATP');
-    const workflows = workflow.getVINIWorkflows();
-    console.log(`Loaded ${workflows.length} workflows from ATP`);
-});
-```
-
-### Workflow Configuration
-
-```javascript
-// VINI configuration for ATP integration
-const viniConfig = {
-    security: {
-        requireAuthentication: true,
-        encryptionKey: 'your-encryption-key'
-    },
-    syncStrategy: 'merge', // merge, replace, append
-    apiEndpoint: '/atp/api',
-    onWorkflowStart: function(event) {
-        console.log('Workflow started:', event.workflow);
-    },
-    onStepComplete: function(event) {
-        console.log('Step completed:', event.step);
-    },
-    onError: function(error) {
-        console.error('Workflow error:', error);
-    }
-};
-```
-
-### Workflow Management Pipeline
-
-1. **Workflow Definition**: Define user workflows programmatically
-2. **Workflow Execution**: Execute workflows locally or with server validation
-3. **Workflow Monitoring**: Monitor workflow execution progress
-4. **Workflow Integration**: Integrate with VICI, VIDI, and VENI
-5. **Workflow Distribution**: Distribute workflows through ATP APIs
-
-## Development Setup
-
-### Local Development
-
-```bash
-# Test in browser
-# Open browser and load:
-# http://localhost:8080/vini.html
-# (VINI will automatically load and display workflows)
-
-# Or with Node.js
-node -e "require('vini').test()"
-```
-
-### Testing
-
-```javascript
-// Basic VINI usage test
-const Vini = window.Vini;
-
-const testVini = () => {
-    // Test VINI initialization
-    const workflow = new Vini.Workflow({
-        name: 'Test Workflow',
-        steps: [{
-            name: 'Test Step',
-            action: 'execute'
-        }]
-    });
-    
-    expect(workflow).toBeDefined();
-    expect(workflow.name).toBe('Test Workflow');
-};
-
-// Workflow execution test
-const testWorkflowExecution = () => {
-    const workflow = new Vini.Workflow({
-        name: 'Test Workflow',
-        steps: [{
-            name: 'Test Step',
-            action: 'execute',
-            onComplete: function() {
-                console.log('Workflow completed successfully');
-            }
-        }]
-    });
-
-    workflow.start();
-    expect(workflow.getProgress()).toBeGreaterThan(0);
-};
-```
-
-### Building
-
-```bash
-# Build for distribution
-npm run build
-
-# Output: dist/vini.js (optimized and bundled)
-
-# Test in browser
-# Open browser and load: dist/vini.js
-```
-
-## API Specifications
-
-### High Maturity API (Event-driven)
-
-#### Workflow Management
-- `new Vini.Workflow(options)` - Create new workflow
-- `workflow.start()` - Start workflow execution
-- `workflow.pause()` - Pause workflow execution
-- `workflow.resume()` - Resume workflow execution
-- `workflow.stop()` - Stop workflow execution
-- `workflow.restart()` - Restart workflow
-- `workflow.getState()` - Get current workflow state
-- `workflow.setState(state)` - Set workflow state
-- `workflow.getProgress()` - Get workflow execution progress
-- `workflow.getLogs()` - Get workflow execution logs
-
-#### Workflow Control
-- `workflow.getState()` - Get current workflow state
-- `workflow.setState(state)` - Set workflow state
-- `workflow.getProgress()` - Get workflow execution progress
-- `workflow.getLogs()` - Get workflow execution logs
-
-#### Workflow Events
-- `workflow.on('step-complete', callback)` - Step completion event
-- `workflow.on('validation-error', callback)` - Validation error event
-- `workflow.on('workflow-complete', callback)` - Workflow completion event
-- `workflow.on('workflow-error', callback)` - Workflow error event
-
-### VINI APIs
-
-```javascript
-// Create workflow
-const workflow = new Vini.Workflow({
-    name: 'User Login',
-    steps: [
-        {
-            name: 'Show Login Form',
-            action: 'show',
-            component: 'login-form'
-        }
-    ]
-});
-
-// Start workflow
-workflow.start();
-
-// Get workflow state
-const state = workflow.getState();
-console.log(state);
-
-// Get workflow progress
-const progress = workflow.getProgress();
-console.log(`Progress: ${progress}%`);
-
-// Workflow events
-workflow.on('step-complete', (event) => {
-    console.log(`Step completed: ${event.step.name}`);
-});
-```
-
-### VINI-specific Events
-
-```javascript
-// Step completion event
-workflow.on('step-complete', (event) => {
-    const { step, result } = event;
-    console.log(`${step.name}: ${result}`);
-});
-
-// Validation error event
-workflow.on('validation-error', (event) => {
-    const { step, error } = event;
-    console.error(`Validation failed for step ${step.name}: ${error}`);
-});
-
-// Workflow completion event
-workflow.on('workflow-complete', (event) => {
-    console.log('Workflow completed successfully');
-});
-
-// Workflow error event
-workflow.on('workflow-error', (event) => {
-    const { error } = event;
-    console.error(`Workflow error: ${error}`);
-});
-```
-
-## Security API
-
-### Workflow Security
-- `workflow.setEncryptionKey(key)` - Set encryption key
-- `workflow.requireAuthentication(require)` - Require authentication
-- `workflow.setAccessControl(roles)` - Set access control
-
-### Authentication
-- `workflow.authenticate(token)` - Authenticate with token
-- `workflow.getUser()` - Get current user
-- `workflow.setUser(user)` - Set current user
-
-### Authorization
-- `workflow.hasPermission(resource, action)` - Check permissions
-- `workflow.grantPermission(permission)` - Grant permission
-- `workflow.revokePermission(permission)` - Revoke permission
-
-## Integration API
-
-### VICI Integration
-- `workflow.syncWithVICI(config)` - Synchronize with VICI
-- `workflow.getVICIChanges()` - Get VICI changes
-- `workflow.applyVICIChanges(changes)` - Apply VICI changes
-
-### VIDI Integration
-- `workflow.getVIDIState()` - Get VIDI state
-- `workflow.syncWithVIDI(data)` - Synchronize with VIDI
-- `workflow.getVIDIAnalytics()` - Get VIDI analytics
-
-### VENI Integration
-- `workflow.discoverVENIComponents()` - Discover VENI components
-- `workflow.generateFromVENITemplate(template)` - Generate from VENI template
-- `workflow.integrateWithVENI(component)` - Integrate with VENI component
-
-## Monitoring API
-
-### Workflow Monitoring
-- `workflow.onProgressChanged(callback)` - Progress change callback
-- `workflow.getExecutionLogs()` - Get execution logs
-- `workflow.getPerformanceMetrics()` - Get performance metrics
-
-### Workflow Events
-- `workflow.onStepStart(stepName)` - Step start event
-- `workflow.onStepComplete(stepName)` - Step complete event
-- `workflow.onWorkflowStart()` - Workflow start event
-- `workflow.onWorkflowComplete()` - Workflow complete event
-
-## Error Handling
-
-### VINI Error Types
-- `WorkflowError` - Workflow execution errors
-- `ValidationError` - Validation errors
-- `SecurityError` - Security errors
-- `IntegrationError` - Integration errors
-
-### Error Response Format
-```javascript
-// VINI errors
-class VINIError extends Error {
-  constructor(message, code, details) {
-    super(message);
-    this.code = code;
-    this.details = details;
-    this.timestamp = new Date().toISOString();
-  }
+  current: 1,
+  progress: 50,
+  data: {},
+  created: "...",
+  updated: "...",
+  start_time: "...",
+  end_time: "...",
+  log: [{ at: "...", level: "info", message: "completed step contact" }]
 }
 ```
 
-## Testing
+`define()` with an existing explicit ID replaces that workflow definition. This
+is useful when an application wants a fresh definition at page initialization;
+use a versioned ID when old and new definitions must coexist.
 
-### Unit Tests
+## Lifecycle
 
-```javascript
-// Test workflow creation
- test('Workflow Creation', () => {
-   const workflow = new Vini.Workflow({ name: 'Test Workflow' });
-   expect(workflow).toBeDefined();
-   expect(workflow.name).toBe('Test Workflow');
- });
+| Method | Behavior |
+| --- | --- |
+| `vini.start(id, data?)` | Start a defined, paused, done, or ended workflow. A running workflow is returned unchanged. Starting resets step payloads/completion times and workflow data. |
+| `vini.continue(id, data?)` | Validate and complete the current step, then advance. It is a no-op unless status is `running`. |
+| `vini.complete(id)` | Mark the workflow `done`, set progress to 100, and emit `complete`. |
+| `vini.pause(id)` | Change a running workflow to `paused`. Other statuses are unchanged. |
+| `vini.resume(id)` | Change a paused workflow to `running`. Other statuses are unchanged. |
+| `vini.end(id)` | Mark the workflow `ended` rather than successfully `done`. |
+| `vini.remove(id)` | Remove a workflow from memory and local storage. |
 
-// Test workflow execution
- test('Workflow Execution', () => {
-   const workflow = new Vini.Workflow({
-     name: 'Test Workflow',
-     steps: [{ name: 'Test Step', action: 'execute' }]
-   });
+An empty workflow emits `start`, `step` with a `null` step, and then `complete`
+during `start()`. Completing the last normal step emits `continue`, `step` with
+a `null` step, and then `complete`.
 
-   workflow.start();
-   expect(workflow.getProgress()).toBeGreaterThan(0);
- });
-```
+Validation is synchronous. A false result or thrown value leaves the current
+step and its data unchanged and emits `error`. Promise-returning validators are
+not supported; their Promise object would be treated as a truthy result.
 
-### Integration Tests
+## Events and listeners
 
-```javascript
-// Test VINI integration
- test('VINI-VICI Integration', () => {
-   const workflow = new Vini.Workflow({
-     name: 'Integration Test',
-     steps: [{ name: 'Sync with VICI', action: 'sync' }]
-   });
+By default, lifecycle methods dispatch bubbling `CustomEvent`s on `document`:
 
-   workflow.start();
-   expect(workflow.getVICIChanges()).toBeDefined();
- });
-```
+| Event | `detail.step` |
+| --- | --- |
+| `vini:start` | First step, or `null` for an empty workflow |
+| `vini:step` | Current/next step, or `null` after the final step |
+| `vini:continue` | Next step, or `null` after the final step |
+| `vini:error` | Step whose validator failed or threw |
+| `vini:complete` | `null` |
+| `vini:pause` | Current step |
+| `vini:resume` | Current step |
+| `vini:end` | Current step |
 
-## Performance Considerations
-
-- **Memory Usage**: Monitor for large workflow definitions
-- **CPU Usage**: Optimize workflow execution algorithms
-- **Network I/O**: Cache frequently used workflow data
-- **Disk I/O**: Use efficient storage for workflow state
-- **Concurrent Processing**: Support for concurrent workflow execution
-
-## Future Enhancements
-
-- **AI Integration**: Integrate AI for workflow optimization
-- **Advanced Validation**: Add advanced validation rules
-- **Machine Learning**: ML-powered workflow optimization
-- **Real-time Processing**: Add real-time workflow execution
-- **Cloud Integration**: Integrate with cloud services
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Workflow not starting**
-   ```javascript
-   // Check workflow configuration
-   const workflow = new Vini.Workflow({
-     name: 'Test Workflow',
-     steps: [{ name: 'Test Step', action: 'execute' }]
-   });
-   
-   // Test workflow start
-   workflow.start();
-   ```
-
-2. **Step execution errors**
-   ```javascript
-   // Check step actions and handlers
-   const workflow = new Vini.Workflow({
-     name: 'Test Workflow',
-     steps: [{
-       name: 'Test Step',
-       action: 'execute',
-       onComplete: function() {
-         console.log('Step completed');
-       }
-     }]
-   });
-   ```
-
-3. **Event listener issues**
-   ```javascript
-   // Check event listener registration
-   workflow.on('step-complete', (event) => {
-     console.log('Step completed:', event.step.name);
-   });
-   ```
-
-4. **Integration problems**
-   ```javascript
-   // Check integration configuration
-   const workflow = new Vini.Workflow({
-     name: 'Test Workflow',
-     syncWithATP: true,
-     apiEndpoint: '/atp/api'
-   });
-   ```
-
-### Debugging Commands
+Every event has:
 
 ```javascript
-// Enable debug logging
-Vini.setDebugMode(true);
-
-// Check workflow logs
-const logs = workflow.getExecutionLogs();
-console.log(logs);
-
-// Monitor workflow state
-const state = workflow.getState();
-console.log(state);
+event.detail = {
+  workflowId: workflow.id,
+  workflow, // live workflow object
+  step
+};
 ```
 
-## Conclusion
+`vini:error` additionally has `detail.error`, an `Error` object. For compatibility
+with early consumers, VINI also exposes the workflow fields (`id`, `steps`,
+`current`, `status`, and so on) directly on the event passed to `on()`.
+Application code should prefer `event.detail`.
 
-VINI provides a secure, programmatic workflow definition system that integrates seamlessly with VICI, VIDI, and VENI. It offers enhanced workflow management capabilities while maintaining security and flexibility.
+Listeners can be removed, and a separately constructed manager can release its
+callbacks and cross-tab storage listener:
 
-Key benefits:
+```javascript
+const handler = (event) => console.log(event.type);
+vini.on("step", handler);
+vini.on(handler);       // shorthand: receive every supported event
+vini.off("step", handler);
+vini.off(handler);      // remove from every event list
+vini.destroy();
+```
 
-- **Process Definition**: Programmatic workflow definition with security controls
-- **Component Integration**: Seamless integration with VICI, VIDI, and VENI
-- **Local Execution**: Secure local workflow execution with server validation
-- **Security**: Comprehensive security features and controls
-- **Integration**: Rich integration capabilities with other Emperor42 projects
-- **Monitoring**: Comprehensive workflow monitoring and analytics
-- **Flexibility**: Flexible workflow definition and execution
+Listener exceptions are intentionally isolated so one callback cannot interrupt
+workflow persistence or later callbacks. A custom manager can namespace DOM
+events:
 
-This workflow definition system is production-ready and can be easily integrated into web applications and services with comprehensive workflow management and security features.
+```javascript
+const checkout = new Vini({ eventPrefix: "checkout", storage: window.localStorage });
+// dispatches checkout:start, checkout:step, ...
+```
 
----
+A custom `storage` object implementing `getItem` and `setItem` is useful for
+isolated tests. Passing `null` creates a memory-only manager.
 
-*Document Version: 1.0*
-*Created: 2026-08-25*
-*Last Updated: 2026-08-25*
-*Status: Production Ready*
+## Persistence and cross-tab updates
 
-**License:** MIT License © Matthew Salvatore Giancola.
+VINI serializes its state to the origin-wide `vini_workflows` local-storage key.
+It caps each workflow log at 500 entries. A `storage` event for that key reloads
+the manager's in-memory state, so separate tabs eventually see one another's
+changes. Array-form records from the early implementation are migrated to the
+current keyed object form on load.
+
+Important limitations:
+
+- Storage can be unavailable, full, or blocked. VINI then continues in memory;
+  callers cannot assume a successful disk write.
+- Workflow data and step payloads are stored as **plain JSON**. Do not put
+  secrets, credentials, payment data, or regulated data in a workflow unless
+  the application encrypts sensitive values before calling VINI.
+- Executable validators cannot be serialized and are absent after a page
+  reload. Redefine or reattach them before continuing a restored workflow.
+- VINI does not merge concurrent in-memory changes. Treat workflows as local UI
+  coordination, not a distributed consistency mechanism.
+- Public workflow objects and event details are live references. Mutating them
+  directly bypasses persistence and lifecycle checks.
+
+## Optional VICI encryption delegation
+
+If the VICI browser helper is already loaded, these methods delegate to its
+Web Crypto implementation:
+
+```javascript
+const payload = await vini.encryptData("secret", passphrase);
+const plaintext = await vini.decryptData(payload, passphrase);
+```
+
+VICI is not bundled by VINI. Without it, `encryptData()` deliberately returns:
+
+```javascript
+{ plain: "secret", method: "none" }
+```
+
+This fallback is a compatibility envelope, **not encryption**. Applications
+must not persist or transmit it as though the payload were protected. See
+[SECURITY.md](SECURITY.md).
+
+## Optional standard-library Go demo
+
+The repository includes a small static demo server. It is useful for exercising
+the browser asset outside Stenella; it is not required to embed VINI and does
+not turn local workflows into a server API.
+
+```bash
+go run .
+# open http://127.0.0.1:8088
+```
+
+Configuration:
+
+- `VINI_HOST` — listen host, default `127.0.0.1`.
+- `VINI_PORT` — listen port, default `8088`.
+
+The demo serves only the page, `vini.js`, and its own CSS/JavaScript. It has no
+accounts, persistence backend, TLS, or authorization. The container binds all
+interfaces internally for publishing; publish port 8088 to host loopback only
+unless a separate network policy is in place.
+
+## Tests and checks
+
+The JavaScript tests use Node's built-in test runner only as a development test
+harness with a small browser-environment stub. They do not add a Node runtime
+or server dependency.
+
+```bash
+npm test
+# or: node --test vini_test.js
+```
+
+The Go demo and its handlers are tested with the Go standard library:
+
+```bash
+go test ./...
+```
+
+The browser helper uses ES2017 JavaScript (`class`, `Promise`, and `async`).
+It has a `document.createEvent("CustomEvent")` fallback for browsers where the
+`CustomEvent` constructor is unavailable.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
